@@ -1,0 +1,19 @@
+
+.add-info {
+	margin-top: 20px;
+	margin-left: 10%;
+	margin-right: 10%
+}
+
+textarea {
+	width: 80%;
+	height: 70%;
+}
+
+.edit-logout {
+	margin-left: 90%;
+}
+
+a {
+	text-decoration: none;
+}
