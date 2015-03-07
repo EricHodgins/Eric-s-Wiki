@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>History</h1>
+<div class="history-table">
+	<table id="history-id">
+			{% for page in history %}
+				<tr>
+					<td>{{ page.page_date_edited }}</td>
+					<td>{{ page.page_content|e }}</td>
+					<td><a href="">view</a><a href="">edit</a></td>
+				</tr>
+			{% endfor %}
+	</table>
+</div>
+{% endblock %}
+
