@@ -3,11 +3,15 @@
 {% block content %}
 <div class="edit-logout">
 	<a href="{{ path }}">view</a>
+	|
+	<a href="{{ status }}">{{ link_status }}</a>
 </div>
 <form method="POST">
 	<div class="add-info">
-		<textarea name="content"></textarea>
+		<textarea name="content">{{ original_content }}</textarea>
 		<input type="submit" value="Save">
 	</div>
 </form>
 {% endblock %}
+
+<!-- a href="/signup"    <a href="/login">login</a>-->

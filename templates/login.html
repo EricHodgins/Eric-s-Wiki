@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block content %}
+	<h1>Wiki's Signup</h1>
+	<a href="/signup">signup</a>
+	<h2 class="signup-header">Login</h2>
+	<form method="post">
+		<div class="signup-div">
+			<table>
+				<tr>
+					<td>Username</td>
+					<td><input type="text" name="username" value="{{ username }}"></td>
+					<td class="error">
+						{{ error_username}}
+					</td>
+				</tr>
+				<tr>
+					<td>Password</td>
+					<td><input type="password" name="password"></td>
+					<td class="error">
+						{{ error_password }}
+					</td>
+				</tr>
+			</table>
+		</div>
+		<input type="submit" value="login">
+	</form>
+{% endblock %}

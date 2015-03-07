@@ -2,7 +2,12 @@
 
 {% block content %}
 <div class="edit-logout">
-	<a href="/_edit{{ path }}">edit</a>
+	<a href="{{ path }}">{{ link_name }}</a>
+	|
+	<a href="{{ status }}">{{ link_status }}</a>
 </div>
 {{ new_content }}
 {% endblock %}
+
+
+<!-- signup: /_edit{{ path }} or a href="/signup"    <a href="/login">login</a> -->

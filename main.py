@@ -18,6 +18,12 @@ import webapp2
 import jinja2
 import os
 import time
+import re
+
+import hmac
+import hashlib
+import random
+from string import letters
 
 from google.appengine.ext import db 
 from google.appengine.api import memcache
@@ -28,10 +34,25 @@ jinja_env = jinja2.Environment(loader=jinja2.FileSystemLoader(template_dir),
 
 PAGE_RE = r'/\w*' #  r'(/(?:[a-zA-Z0-9_-]+/?)*)'
 
+#  Regular Expressions for Sign up and login forms
+USER_RE = re.compile(r"^[a-zA-Z0-9_-]{3,20}$")
+def valid_username(username):
+    return username and USER_RE.match(username)
+
+PASS_RE = re.compile(r"^.{3,20}$")
+def valid_password(password):
+    return password and PASS_RE.match(password)
+
+EMAIL_RE  = re.compile(r'^[\S]+@[\S]+\.[\S]+$')
+def valid_email(email):
+    return not email or EMAIL_RE.match(email)
+
 
 def render_str(template, **params):
 	t = jinja_env.get_template(template)
 	return t.render(params)
+
+
 
 class MainHandler(webapp2.RequestHandler):
 	def get(self):
@@ -47,25 +68,59 @@ class MainHandler(webapp2.RequestHandler):
 class WikiPage(MainHandler):
 	def get(self):
 		pg_path = self.request.path
-		print pg_path
-		self.render("viewMode.html", path=pg_path)
+		pagename = pg_path.split('/')[1]
+		print "*"*20
+		cookie_val = self.request.cookies.get('user_id')
+		logged_in = check_if_logged_in(cookie_val)
+		print "LOGGED IN?: %s" % logged_in
+		if check_cache(pagename):
+			page_content = cache_input(pagename)
+			if logged_in:
+				self.render("viewMode.html", path='/_edit'+pg_path, link_name="edit", new_content=page_content,
+							status="/logout", link_status="logout")
+			else:
+				pg_path = '/signup'
+				self.render("viewMode.html", path=pg_path, link_name="signup", new_content=page_content,
+							status="/login", link_status="login")
+		else:
+			if logged_in:
+				self.redirect(('/_edit%s' % pg_path))
+			else:
+				self.redirect('/signup')
 
-  	def post(self):
-  		pg_path = self.request.path
-  		self.redirect(('/_edit%s' % pg_path))
+  	# def post(self):
+  	# 	pg_path = self.request.path
+  	# 	self.redirect(('/_edit%s' % pg_path))
+
+
+def check_if_logged_in(cookie_val):
+	val = cookie_val.split('|')[0]
+	if cookie_val == make_secure_val(val):
+		return True
+	else:
+		return False
+
+
+
+def check_cache(pagename):
+	key = pagename
+	page_content = memcache.get(key)
+	print page_content
+	if page_content:
+		return True
+	return False
 
 
 def cache_input(pagename, update=False):
 	key = pagename
 	page_content = memcache.get(key)
-	if page_content is None or c:
-		pages = db.GqlQuery("SELECT * FROM Pages "
-							"WHERE page_name = :1", pagename)
-
-		
-		print "*"*20
-		print pages[0].page_content
-		#memcache.set(key, pages.page_content)
+	if page_content is None or update:
+		pages = db.GqlQuery("SELECT * FROM Pages " +
+							"WHERE page_name = :1 "
+							"ORDER by page_date_edited DESC ", pagename) # need to figure out how to sort for newest entry.
+		print "cache_input : % s" % pages[0].page_content
+		page_content = pages[0].page_content
+		memcache.set(key, pages[0].page_content)
 
 	return page_content
 
@@ -73,7 +128,14 @@ class EditPage(MainHandler):
 
 	def get(self):
 		prev_path = self.get_prev_path()
-		self.render("editMode.html", path=prev_path)
+		pagename = prev_path.split('/')[1]
+
+		if check_cache(pagename):
+			original_content = cache_input(prev_path.split('/')[1])
+			self.render("editMode.html", path=prev_path, original_content=original_content, status="/logout",
+						link_status="logout")
+		else:
+			self.render("editMode.html", path=prev_path, status="/logout", link_status="logout")
 
 	def post(self):
 		prev_path = self.get_prev_path()
@@ -83,9 +145,10 @@ class EditPage(MainHandler):
 		page.page_content = new_content
 
 		page.put()
-		time.sleep(2)
+		time.sleep(1)
 
 		cache_input(page_name, update=True)
+		time.sleep(1)
 		print "*"*20
 		self.redirect(prev_path)
 		# self.render("viewMode.html", new_content=new_content)
@@ -97,19 +160,134 @@ class EditPage(MainHandler):
 
 		return prev_path
 
+
+# store all wiki pages
 class Pages(db.Model):
 	page_name = db.StringProperty(required=True)
 	page_content = db.TextProperty()
+	page_date_edited = db.DateTimeProperty(auto_now_add=True)
+
+
+# store all users info
+class User(db.Model):
+	name = db.StringProperty(required=True)
+	pw_hash = db.StringProperty(required=True)
+
+	@classmethod
+	def by_name(cls, name):
+		u = User.all().filter('name =', name).get()
+		return u
+
+	@classmethod
+	def login(cls, name, pw):
+		u = User.all().filter('name =', name).get()
+		if u:
+			if valid_pw(name, pw, u.pw_hash):
+				return True
+		else:
+			return False
 
 
 
+SECRET = 'supersecret'
+def make_secure_val(val):
+	return "%s|%s" % (val, hmac.new(SECRET, val).hexdigest())
+
+
+def make_salt(length=5):
+	return ''.join(random.choice(letters) for x in xrange(length))
+
+def make_pw_hash(name, pw, salt=None):
+	if not salt:
+		salt = make_salt()
+	h = hashlib.sha256(name + pw + salt).hexdigest()
+	return "%s,%s" % (salt, h)
+
+
+# make sure okay at login
+def valid_pw(name, pw, h):
+	salt = h.split(',')[0]
+	if h == make_pw_hash(name, pw, salt):
+		return True
+	else:
+		return False
 
 
 
+class Signup(MainHandler):
+	def get(self):
+		self.render("signup.html")
+
+	def post(self):
+		self.username = self.request.get('username')
+		self.password = self.request.get('password')
+		self.verify = self.request.get('verify')
+
+		params = dict(username=self.username)
+
+		check_error = False
+		if not valid_username(self.username):
+			params['error_username'] = "Not a valid username"
+			check_error = True
+		if not valid_password(self.password):
+			params['error_password'] = "Not a valid password"
+			check_error = True
+		elif self.password != self.verify:
+			params['error_verify'] = "Passwords do not match"
+			check_error =  True
+
+		if check_error:
+			self.render("signup.html", **params)
+		else:
+			if not self.check_user_exists():
+				time.sleep(1)
+				u = User.by_name(self.username)
+				cookie_val = make_secure_val(str(u.key().id()))
+				self.response.headers.add_header('set-cookie', '%s=%s; Path=/' % ('user_id', cookie_val))
+
+				self.redirect('/WikiPage')
+
+	def check_user_exists(self):
+		u = User.by_name(self.username)
+		if u:
+			err_msg = "Sorry, that user is not available"
+			self.render("signup.html", error_username=err_msg)
+			return True
+		else:
+			password = make_pw_hash(self.username, self.password)
+			u = User(name=self.username, pw_hash=password)
+			u.put()
+			return False
+
+class Login(MainHandler):
+	def get(self):
+		self.render("login.html")
+
+	def post(self):
+		username = self.request.get('username')
+		password = self.request.get('password')
+
+		if User.login(username, password):
+			u = User.by_name(username)
+			cookie_val = make_secure_val(str(u.key().id()))
+			self.response.headers.add_header('set-cookie', '%s=%s; Path=/' % ('user_id', cookie_val))
+			self.redirect('/WikiPage')
+		else:
+			err_msg = "Sorry, that was not valid"
+			self.render("login.html", error_password=err_msg)
+
+
+class Logout(MainHandler):
+	def get(self):
+		self.response.headers.add_header('set-cookie', 'user_id=; Path=/')
+		self.redirect('/login')
 
 
 app = webapp2.WSGIApplication([
 	('/', MainHandler),
+	('/signup', Signup),
+	('/login', Login),
+	('/logout', Logout),
 	(PAGE_RE, WikiPage),
 	('/_edit' + PAGE_RE, EditPage)
 ], debug=True)
