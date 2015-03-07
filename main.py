@@ -83,10 +83,20 @@ class WikiPage(MainHandler):
 				self.render("viewMode.html", path=pg_path, link_name="signup", new_content=page_content,
 							status="/login", link_status="login")
 		else:
-			if logged_in:
-				self.redirect(('/_edit%s' % pg_path))
+			page_content = try_page_db(pagename)
+			if page_content:
+				if logged_in:
+					self.render("viewMode.html", path='/_edit'+pg_path, link_name="edit", new_content=page_content,
+								status="/logout", link_status="logout")
+				else:
+					pg_path = '/signup'
+					self.render("viewMode.html", path=pg_path, link_name="signup", new_content=page_content,
+								status="/login", link_status="login")
 			else:
-				self.redirect('/signup')
+				if logged_in:
+					self.redirect(('/_edit%s' % pg_path))
+				else:
+					self.redirect('/signup')
 
   	# def post(self):
   	# 	pg_path = self.request.path
@@ -109,6 +119,21 @@ def check_cache(pagename):
 	if page_content:
 		return True
 	return False
+
+def try_page_db(path):
+	print "*"*20
+	print "try page db before: %s" % path
+	pages = db.GqlQuery("SELECT * FROM Pages " +
+						"WHERE page_name = :1 " 
+						"ORDER by page_date_edited DESC ", path).get()
+
+	print "try page db after: %s" % pages
+	if pages:
+		key = path
+		memcache.set(key, pages.page_content)
+		return pages.page_content
+	else:
+		return False
 
 
 def cache_input(pagename, update=False):
@@ -283,11 +308,23 @@ class Logout(MainHandler):
 		self.redirect('/login')
 
 
+class History(MainHandler):
+	def get(self):
+		pages = db.GqlQuery("SELECT * FROM Pages")
+		print "*"*20
+		print "HIStORY"
+		for page in pages:
+			print page.page_content
+		self.render("history.html", history=pages)
+
+
+
 app = webapp2.WSGIApplication([
 	('/', MainHandler),
 	('/signup', Signup),
 	('/login', Login),
 	('/logout', Logout),
+	('/history', History),
 	(PAGE_RE, WikiPage),
 	('/_edit' + PAGE_RE, EditPage)
 ], debug=True)
