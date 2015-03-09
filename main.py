@@ -32,7 +32,8 @@ template_dir = os.path.join(os.path.dirname(__file__), 'templates')
 jinja_env = jinja2.Environment(loader=jinja2.FileSystemLoader(template_dir),
 							   autoescape=False)
 
-PAGE_RE = r'/\w*' #  r'(/(?:[a-zA-Z0-9_-]+/?)*)'
+#PAGE_RE = r'/\w*' #  r'(/(?:[a-zA-Z0-9_-]+/?)*)'
+PAGE_RE = r'/[\w+/?]+'
 
 #  Regular Expressions for Sign up and login forms
 USER_RE = re.compile(r"^[a-zA-Z0-9_-]{3,20}$")
@@ -68,39 +69,57 @@ class MainHandler(webapp2.RequestHandler):
 class WikiPage(MainHandler):
 	def get(self):
 		pg_path = self.request.path
-		pagename = pg_path.split('/')[1]
-		print "*"*20
+		# pagename = pg_path.split('/')[1]
+		pagename = pg_path[1:]
+		page_content = None
+		print "=="*20
+		print "pagename: %s, pg_path: %s" % (pagename, pg_path)
+		page_version = self.request.query_string
+		if page_version:
+			page_content = self.render_history_version(page_version, pagename)
+			self.render("viewMode.html", new_content=page_content)
+
+
+
 		cookie_val = self.request.cookies.get('user_id')
 		logged_in = check_if_logged_in(cookie_val)
 		print "LOGGED IN?: %s" % logged_in
-		if check_cache(pagename):
-			page_content = cache_input(pagename)
-			if logged_in:
-				self.render("viewMode.html", path='/_edit'+pg_path, link_name="edit", new_content=page_content,
-							status="/logout", link_status="logout")
-			else:
-				pg_path = '/signup'
-				self.render("viewMode.html", path=pg_path, link_name="signup", new_content=page_content,
-							status="/login", link_status="login")
-		else:
-			page_content = try_page_db(pagename)
-			if page_content:
+
+		print "=="*20
+		if not page_content:
+			if check_cache(pagename):
+				page_content = cache_input(pagename)
 				if logged_in:
 					self.render("viewMode.html", path='/_edit'+pg_path, link_name="edit", new_content=page_content,
-								status="/logout", link_status="logout")
+								status="/logout", link_status="logout", history_link='/_history'+pg_path)  #  need to put history for the rest.
 				else:
 					pg_path = '/signup'
 					self.render("viewMode.html", path=pg_path, link_name="signup", new_content=page_content,
 								status="/login", link_status="login")
 			else:
-				if logged_in:
-					self.redirect(('/_edit%s' % pg_path))
+				page_content = try_page_db(pagename)
+				if page_content:
+					if logged_in:
+						self.render("viewMode.html", path='/_edit'+pg_path, link_name="edit", new_content=page_content,
+									status="/logout", link_status="logout")
+					else:
+						pg_path = '/signup'
+						self.render("viewMode.html", path=pg_path, link_name="signup", new_content=page_content,
+									status="/login", link_status="login")
 				else:
-					self.redirect('/signup')
+					if logged_in:
+						self.redirect(('/_edit%s' % pg_path))
+					else:
+						self.redirect('/signup')
 
-  	# def post(self):
-  	# 	pg_path = self.request.path
-  	# 	self.redirect(('/_edit%s' % pg_path))
+ 	def render_history_version(self, version, path):
+ 		v_num = int(version.split('=')[-1])
+ 		print "the path: %s, the v: %s" % (path, v_num)
+ 		pages = db.GqlQuery("SELECT * FROM Pages " +
+ 							"WHERE page_name = :1 " +
+ 							"ORDER by page_date_edited DESC ", path)
+ 		page_version = pages[v_num].page_content
+ 		return page_version
 
 
 def check_if_logged_in(cookie_val):
@@ -151,11 +170,36 @@ def cache_input(pagename, update=False):
 
 class EditPage(MainHandler):
 
-	def get(self):
+	def get(self, page_version=None):
 		prev_path = self.get_prev_path()
-		pagename = prev_path.split('/')[1]
+		page_version = self.request.query_string
+		print "PREV_PATH: %s, query: %s" % (prev_path, page_version)
+		print prev_path[1:]
+		#pagename = prev_path.split('/')[1]
+		pagename = prev_path[1:]
+		if pagename[-1] == '/':
+			pagename = pagename[:-1]
+			
 
-		if check_cache(pagename):
+		if page_version:
+			print "NEW PAGENAME: %s " % pagename
+			pages = db.GqlQuery("SELECT * FROM Pages " +
+								"WHERE page_name = :1 " 
+								"ORDER by page_date_edited DESC ", pagename)
+			print "H"*20
+			v_num = int(page_version.split('=')[-1])
+			print "ENTITIY KEY: %s" % pages[v_num].key()
+			version_key = pages[v_num].key()
+			self.response.headers.add_header('set-cookie', '%s=%s; Path=/' % ('history_version', version_key))
+
+			original_content = pages[v_num].page_content
+
+			print original_content
+			self.render("editMode.html", path=prev_path, original_content=original_content, status="/logout",
+						link_status="logout")
+
+
+		elif check_cache(pagename):
 			original_content = cache_input(prev_path.split('/')[1])
 			self.render("editMode.html", path=prev_path, original_content=original_content, status="/logout",
 						link_status="logout")
@@ -163,19 +207,34 @@ class EditPage(MainHandler):
 			self.render("editMode.html", path=prev_path, status="/logout", link_status="logout")
 
 	def post(self):
+		page_version = self.request.query_string
 		prev_path = self.get_prev_path()
-		page_name = prev_path.split('/')[1]
-		page = Pages(page_name=page_name)
-		new_content = self.request.get('content')
-		page.page_content = new_content
 
-		page.put()
-		time.sleep(1)
+		if prev_path[-1] == '/':
+			prev_path = prev_path[:-1]
 
-		cache_input(page_name, update=True)
-		time.sleep(1)
-		print "*"*20
-		self.redirect(prev_path)
+
+		if page_version:
+			page_key = self.request.cookies.get('history_version')
+			print "POSTING NEW HISTORY EDIT: %s" % Pages.get(page_key)
+			page = Pages.get(page_key)
+			page.page_content = self.request.get('content')
+			page.put()
+			time.sleep(1)
+			self.redirect('/_history'+prev_path)
+		else:
+			page_name = prev_path[1:]
+			page = Pages(page_name=page_name)
+			new_content = self.request.get('content')
+			page.page_content = new_content
+
+			page.put()
+			time.sleep(1)
+
+			cache_input(page_name, update=True)
+			time.sleep(1)
+			print "*"*20
+			self.redirect(prev_path)
 		# self.render("viewMode.html", new_content=new_content)
 
 	def get_prev_path(self):
@@ -310,12 +369,17 @@ class Logout(MainHandler):
 
 class History(MainHandler):
 	def get(self):
-		pages = db.GqlQuery("SELECT * FROM Pages")
+		path = self.request.path
+		#path = path.split('/')[-1]
+		path = path[10:]
+		print "WikiPage History: %s" % path
+		pages = db.GqlQuery("SELECT * FROM Pages " +
+							"WHERE page_name = :1 " 
+							"ORDER by page_date_edited DESC ", path)
+
 		print "*"*20
 		print "HIStORY"
-		for page in pages:
-			print page.page_content
-		self.render("history.html", history=pages)
+		self.render("history.html", history=pages, view_link=path, edit_link="/_edit/"+path)
 
 
 
@@ -324,7 +388,7 @@ app = webapp2.WSGIApplication([
 	('/signup', Signup),
 	('/login', Login),
 	('/logout', Logout),
-	('/history', History),
+	('/_history' + PAGE_RE, History),
+	('/_edit' + PAGE_RE, EditPage),
 	(PAGE_RE, WikiPage),
-	('/_edit' + PAGE_RE, EditPage)
 ], debug=True)
